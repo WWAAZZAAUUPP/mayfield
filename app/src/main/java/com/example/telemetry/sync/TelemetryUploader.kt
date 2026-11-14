@@ -11,7 +11,6 @@ sealed class UploadOutcome {
     object Success : UploadOutcome()
     object Retryable : UploadOutcome()
     object Permanent : UploadOutcome()
-    data class Error(val message: String) : UploadOutcome()
 }
 
 class TelemetryUploader(private val endpoint: String) {
@@ -23,7 +22,6 @@ class TelemetryUploader(private val endpoint: String) {
     }
 
     fun upload(records: List<TelemetryRecord>): UploadOutcome {
-        if (records.isEmpty()) return UploadOutcome.Success
         val body = buildPayload(records).toString()
         return try {
             val conn = (URL(endpoint).openConnection() as HttpsURLConnection).apply {
@@ -31,7 +29,7 @@ class TelemetryUploader(private val endpoint: String) {
                 connectTimeout = 15_000
                 readTimeout = 20_000
                 doOutput = true
-
+                
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 setRequestProperty("apikey", supabaseAnonKey)
                 setRequestProperty("Authorization", "Bearer $supabaseAnonKey")
@@ -39,20 +37,16 @@ class TelemetryUploader(private val endpoint: String) {
             }
             try {
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                val responseCode = conn.responseCode
-                when (responseCode) {
+                when (conn.responseCode) {
                     in 200..299 -> UploadOutcome.Success
                     408, 429, in 500..599 -> UploadOutcome.Retryable
-                    else -> {
-                        val errorBody = try { conn.errorStream?.bufferedReader()?.readText() } catch(e: Exception) { "" }
-                        UploadOutcome.Error("HTTP $responseCode: $errorBody")
-                    }
+                    else -> UploadOutcome.Permanent
                 }
             } finally {
                 conn.disconnect()
             }
         } catch (e: IOException) {
-            UploadOutcome.Error(e.localizedMessage ?: "Network IO exception")
+            UploadOutcome.Retryable
         }
     }
 
@@ -66,6 +60,8 @@ class TelemetryUploader(private val endpoint: String) {
                 r.ipAddress?.let { put("ip_address", it) }
                 r.latitude?.let { put("latitude", it) }
                 r.longitude?.let { put("longitude", it) }
+                r.accuracyMeters?.let { put("accuracy_meters", it.toDouble()) }
+                put("payload", JSONObject(r.payloadJson))
             })
         }
         return array
