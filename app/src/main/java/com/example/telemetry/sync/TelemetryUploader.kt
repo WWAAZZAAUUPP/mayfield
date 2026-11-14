@@ -8,15 +8,13 @@ import javax.net.ssl.HttpsURLConnection
 
 sealed class UploadOutcome {
     object Success : UploadOutcome()
-    object Retryable : UploadOutcome()
-    object Permanent : UploadOutcome()
     data class Error(val message: String) : UploadOutcome()
 }
 
 class TelemetryUploader(private val endpointUrl: String, private val apiKey: String = "") {
     fun upload(records: List<TelemetryRecord>): UploadOutcome {
         if (records.isEmpty()) return UploadOutcome.Success
-        try {
+        return try {
             val url = URL(endpointUrl)
             val conn = (url.openConnection() as HttpsURLConnection).apply {
                 requestMethod = "POST"
@@ -49,13 +47,14 @@ class TelemetryUploader(private val endpointUrl: String, private val apiKey: Str
             }
 
             val responseCode = conn.responseCode
-            return when (responseCode) {
-                in 200..299 -> UploadOutcome.Success
-                in 500..599 -> UploadOutcome.Retryable
-                else -> UploadOutcome.Permanent
+            if (responseCode in 200..299) {
+                UploadOutcome.Success
+            } else {
+                val errorBody = try { conn.errorStream?.bufferedReader()?.readText() } catch(e: Exception) { "" }
+                UploadOutcome.Error("HTTP $responseCode: $errorBody")
             }
         } catch (e: Exception) {
-            return UploadOutcome.Retryable
+            UploadOutcome.Error(e.localizedMessage ?: "Unknown network exception")
         }
     }
 }
