@@ -16,43 +16,40 @@ import kotlinx.coroutines.launch
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Start the background WorkManager
         TelemetryScheduler.schedulePeriodicUpload(this)
 
-        // Build a simple UI programmatically 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(64, 64, 64, 64)
         }
 
-        val title = TextView(this).apply {
-            text = "Telemetry Engine Active"
-            textSize = 20f
-            setPadding(0, 0, 0, 32)
-        }
-
-        val btn = Button(this).apply {
-            text = "Log Test Event"
+        val btnLog = Button(this).apply {
+            text = "1. Log Test Event"
             setOnClickListener {
                 CoroutineScope(Dispatchers.IO).launch {
                     TelemetryDatabase.get(this@MainActivity).telemetryDao().insert(
                         TelemetryRecord(
                             timestampMs = System.currentTimeMillis(),
                             eventType = "MANUAL_TEST_EVENT",
-                            latitude = 9.03, // Addis Ababa test coordinates
+                            latitude = 9.03,
                             longitude = 38.74
                         )
                     )
-                    runOnUiThread {
-                        Toast.makeText(this@MainActivity, "Event saved to local queue", Toast.LENGTH_SHORT).show()
-                    }
+                    runOnUiThread { Toast.makeText(this@MainActivity, "Saved to local queue", Toast.LENGTH_SHORT).show() }
                 }
             }
         }
 
-        layout.addView(title)
-        layout.addView(btn)
+        val btnSync = Button(this).apply {
+            text = "2. Force Sync Now"
+            setOnClickListener {
+                TelemetryScheduler.forceSyncNow(this@MainActivity)
+                Toast.makeText(this@MainActivity, "Upload triggered...", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        layout.addView(btnLog)
+        layout.addView(btnSync)
         setContentView(layout)
     }
 }
