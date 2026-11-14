@@ -33,6 +33,14 @@ object SyncManager {
                         dao.markSynced(batch.map { it.id })
                         updateStatus("Success: Direct Sync Completed (${batch.size} records)")
                     }
+                    is UploadOutcome.Retryable -> {
+                        updateStatus("Direct Sync Retryable -> Falling back to WorkManager")
+                        enqueueWorkManagerFallback(appContext)
+                    }
+                    is UploadOutcome.Permanent -> {
+                        dao.markSynced(batch.map { it.id }) // clear poison pill
+                        updateStatus("Direct Sync Permanent Failure -> Cleared batch")
+                    }
                     is UploadOutcome.Error -> {
                         updateStatus("Direct Failed: ${outcome.message} -> Falling back to WorkManager")
                         enqueueWorkManagerFallback(appContext)

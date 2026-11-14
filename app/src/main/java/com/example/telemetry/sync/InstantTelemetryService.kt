@@ -154,9 +154,10 @@ class InstantTelemetryService : Service() {
             if (batch.isNotEmpty()) {
                 val uploader = TelemetryUploader(BuildConfig.TELEMETRY_ENDPOINT)
                 if (uploader.upload(batch) is UploadOutcome.Success) {
-                    dao.markSynced(batch.map { id -> id })
+                    dao.markSynced(batch.map { it.id })
                 }
             }
         }
     }
 }
+

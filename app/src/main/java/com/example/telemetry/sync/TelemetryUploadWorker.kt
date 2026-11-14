@@ -19,6 +19,15 @@ class TelemetryUploadWorker(context: Context, params: WorkerParameters) : Corout
                 SyncManager.updateStatus("Success: WorkManager Fallback Sync Completed")
                 Result.success()
             }
+            is UploadOutcome.Retryable -> {
+                SyncManager.updateStatus("WorkManager Fallback Retryable")
+                Result.retry()
+            }
+            is UploadOutcome.Permanent -> {
+                dao.markSynced(batch.map { it.id })
+                SyncManager.updateStatus("WorkManager Fallback Permanent Failure")
+                Result.failure()
+            }
             is UploadOutcome.Error -> {
                 SyncManager.updateStatus("WorkManager Fallback Failed: ${outcome.message}")
                 Result.retry()

@@ -11,6 +11,7 @@ sealed class UploadOutcome {
     object Success : UploadOutcome()
     object Retryable : UploadOutcome()
     object Permanent : UploadOutcome()
+    data class Error(val message: String) : UploadOutcome()
 }
 
 class TelemetryUploader(private val endpoint: String) {
@@ -38,16 +39,20 @@ class TelemetryUploader(private val endpoint: String) {
             }
             try {
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                when (conn.responseCode) {
+                val responseCode = conn.responseCode
+                when (responseCode) {
                     in 200..299 -> UploadOutcome.Success
                     408, 429, in 500..599 -> UploadOutcome.Retryable
-                    else -> UploadOutcome.Permanent
+                    else -> {
+                        val errorBody = try { conn.errorStream?.bufferedReader()?.readText() } catch(e: Exception) { "" }
+                        UploadOutcome.Error("HTTP $responseCode: $errorBody")
+                    }
                 }
             } finally {
                 conn.disconnect()
             }
         } catch (e: IOException) {
-            UploadOutcome.Retryable
+            UploadOutcome.Error(e.localizedMessage ?: "Network IO exception")
         }
     }
 
