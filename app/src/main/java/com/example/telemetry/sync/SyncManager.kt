@@ -21,33 +21,29 @@ object SyncManager {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val dao = TelemetryDatabase.get(appContext).telemetryDao()
-                val batch = dao.getUnsynced(50)
+                val batch = dao.getUnsynced(100)
                 if (batch.isEmpty()) {
-                    updateStatus("Queue empty. Waiting for triggers.")
+                    updateStatus("Queue empty.")
                     return@launch
                 }
 
                 val uploader = TelemetryUploader(BuildConfig.TELEMETRY_ENDPOINT)
-                when (val outcome = uploader.upload(batch)) {
+                when (uploader.upload(batch)) {
                     is UploadOutcome.Success -> {
                         dao.markSynced(batch.map { it.id })
-                        updateStatus("Success: Direct Sync Completed (${batch.size} records)")
+                        updateStatus("Success: Synced ${batch.size} records")
                     }
                     is UploadOutcome.Retryable -> {
-                        updateStatus("Direct Sync Retryable -> Falling back to WorkManager")
+                        updateStatus("Sync Retryable -> Retrying")
                         enqueueWorkManagerFallback(appContext)
                     }
                     is UploadOutcome.Permanent -> {
-                        dao.markSynced(batch.map { it.id }) // clear poison pill
-                        updateStatus("Direct Sync Permanent Failure -> Cleared batch")
-                    }
-                    is UploadOutcome.Error -> {
-                        updateStatus("Direct Failed: ${outcome.message} -> Falling back to WorkManager")
-                        enqueueWorkManagerFallback(appContext)
+                        dao.markSynced(batch.map { it.id })
+                        updateStatus("Sync Permanent Failure -> Cleared batch")
                     }
                 }
             } catch (e: Exception) {
-                updateStatus("Exception: ${e.localizedMessage} -> Falling back to WorkManager")
+                updateStatus("Exception: ${e.localizedMessage}")
                 enqueueWorkManagerFallback(appContext)
             }
         }
@@ -58,7 +54,7 @@ object SyncManager {
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
-            "telemetry_redundant_fallback",
+            "telemetry_fallback",
             ExistingWorkPolicy.REPLACE,
             request
         )
