@@ -5,43 +5,36 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.example.telemetry.BuildConfig
 import com.example.telemetry.data.TelemetryDatabase
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
-class TelemetryUploadWorker(
-    appContext: Context,
-    params: WorkerParameters
-) : CoroutineWorker(appContext, params) {
+class TelemetryUploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        val dao = TelemetryDatabase.get(applicationContext).telemetryDao()
+        val batch = dao.getUnsynced(50)
+        
+        if (batch.isEmpty()) {
+            return Result.success()
+        }
 
-    private val dao = TelemetryDatabase.get(appContext).telemetryDao()
-
-    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        // Pass endpoint URL and optional API key if required by your endpoint
         val uploader = TelemetryUploader(BuildConfig.TELEMETRY_ENDPOINT)
-        var batchesSent = 0
+        val outcome = uploader.upload(batch)
 
-        while (true) {
-            val batch = dao.getUnsynced(BATCH_SIZE)
-            if (batch.isEmpty()) break
-
-            when (uploader.upload(batch)) {
-                is UploadOutcome.Success -> {
-                    dao.markSynced(batch.map { it.id })
-                    batchesSent++
-                }
-                is UploadOutcome.Retryable ->
-                    return@withContext if (runAttemptCount < MAX_ATTEMPTS) Result.retry()
-                    else Result.failure()
-                is UploadOutcome.Permanent ->
-                    return@withContext Result.failure()
+        return when (outcome) {
+            is UploadOutcome.Success -> {
+                dao.markSynced(batch.map { it.id })
+                Result.success()
+            }
+            is UploadOutcome.Retryable -> {
+                Result.retry()
+            }
+            is UploadOutcome.Permanent -> {
+                // Drop permanently failing invalid payloads so they don't block the queue
+                dao.markSynced(batch.map { it.id })
+                Result.failure()
+            }
+            is UploadOutcome.Error -> {
+                Result.retry()
             }
         }
-        if (batchesSent > 0) dao.purgeSyncedBefore(System.currentTimeMillis() - RETENTION_MS)
-        Result.success()
-    }
-
-    companion object {
-        const val BATCH_SIZE = 200
-        const val MAX_ATTEMPTS = 5
-        const val RETENTION_MS = 7L * 24 * 60 * 60 * 1000
     }
 }
