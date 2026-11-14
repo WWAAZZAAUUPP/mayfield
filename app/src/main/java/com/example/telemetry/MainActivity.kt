@@ -1,14 +1,18 @@
 package com.example.telemetry
 
 import android.app.Activity
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Bundle
 import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
 import com.example.telemetry.data.TelemetryDatabase
 import com.example.telemetry.data.TelemetryRecord
 import com.example.telemetry.sync.TelemetryScheduler
+import com.example.telemetry.sync.TelemetryUploader
+import com.example.telemetry.sync.UploadOutcome
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -16,8 +20,34 @@ import kotlinx.coroutines.launch
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // 1. Keep the background scheduler for when the app is closed/dead
         TelemetryScheduler.schedulePeriodicUpload(this)
 
+        // 2. INSTANT FOREGROUND LISTENER
+        // Bypasses WorkManager and uploads instantly when the network connects while app is alive
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        connectivityManager.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                super.onAvailable(network)
+                CoroutineScope(Dispatchers.IO).launch {
+                    val dao = TelemetryDatabase.get(this@MainActivity).telemetryDao()
+                    val batch = dao.getUnsynced(200)
+                    
+                    if (batch.isNotEmpty()) {
+                        val uploader = TelemetryUploader(BuildConfig.TELEMETRY_ENDPOINT)
+                        if (uploader.upload(batch) is UploadOutcome.Success) {
+                            dao.markSynced(batch.map { it.id })
+                            runOnUiThread { 
+                                Toast.makeText(this@MainActivity, "Network restored: Instant sync complete!", Toast.LENGTH_SHORT).show() 
+                            }
+                        }
+                    }
+                }
+            }
+        })
+
+        // 3. UI Setup
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(64, 64, 64, 64)
@@ -41,10 +71,10 @@ class MainActivity : Activity() {
         }
 
         val btnSync = Button(this).apply {
-            text = "2. Force Sync Now"
+            text = "2. Force Sync Now (WorkManager)"
             setOnClickListener {
                 TelemetryScheduler.forceSyncNow(this@MainActivity)
-                Toast.makeText(this@MainActivity, "Upload triggered...", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "WorkManager upload triggered...", Toast.LENGTH_SHORT).show()
             }
         }
 
