@@ -24,11 +24,16 @@ object TelemetryScheduler {
         )
     }
 
-    // ADD THIS NEW FUNCTION:
+    // CORRECTED FUNCTION
     fun forceSyncNow(context: Context) {
-        val request = OneTimeWorkRequestBuilder<TelemetryUploadWorker>()
+        val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
+
+        val request = OneTimeWorkRequestBuilder<TelemetryUploadWorker>()
+            .setConstraints(constraints)
+            .build()
+            
         WorkManager.getInstance(context).enqueue(request)
     }
 }
