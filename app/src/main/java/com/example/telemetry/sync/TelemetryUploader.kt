@@ -60,6 +60,8 @@ class TelemetryUploader(private val endpoint: String) {
                 put("android_record_id", r.id)
                 put("timestamp_ms", r.timestampMs)
                 put("event_type", r.eventType)
+                put("device_id", r.deviceId)
+                r.ipAddress?.let { put("ip_address", it) }
                 r.latitude?.let { put("latitude", it) }
                 r.longitude?.let { put("longitude", it) }
                 r.accuracyMeters?.let { put("accuracy_meters", it.toDouble()) }
@@ -69,3 +71,4 @@ class TelemetryUploader(private val endpoint: String) {
         return array
     }
 }
+

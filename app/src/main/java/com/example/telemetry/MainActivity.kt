@@ -1,85 +1,59 @@
 package com.example.telemetry
 
+import android.Manifest
 import android.app.Activity
-import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
+import android.content.pm.PackageManager
 import android.os.Bundle
-import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.Toast
-import com.example.telemetry.data.TelemetryDatabase
-import com.example.telemetry.data.TelemetryRecord
+import android.widget.TextView
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.work.*
+import com.example.telemetry.sync.AutonomousLoggerWorker
 import com.example.telemetry.sync.TelemetryScheduler
-import com.example.telemetry.sync.TelemetryUploader
-import com.example.telemetry.sync.UploadOutcome
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
 
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // 1. Keep the background scheduler for when the app is closed/dead
-        TelemetryScheduler.schedulePeriodicUpload(this)
-
-        // 2. INSTANT FOREGROUND LISTENER
-        // Bypasses WorkManager and uploads instantly when the network connects while app is alive
-        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        connectivityManager.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                super.onAvailable(network)
-                CoroutineScope(Dispatchers.IO).launch {
-                    val dao = TelemetryDatabase.get(this@MainActivity).telemetryDao()
-                    val batch = dao.getUnsynced(200)
-                    
-                    if (batch.isNotEmpty()) {
-                        val uploader = TelemetryUploader(BuildConfig.TELEMETRY_ENDPOINT)
-                        if (uploader.upload(batch) is UploadOutcome.Success) {
-                            dao.markSynced(batch.map { it.id })
-                            runOnUiThread { 
-                                Toast.makeText(this@MainActivity, "Network restored: Instant sync complete!", Toast.LENGTH_SHORT).show() 
-                            }
-                        }
-                    }
-                }
-            }
-        })
-
-        // 3. UI Setup
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(64, 64, 64, 64)
         }
-
-        val btnLog = Button(this).apply {
-            text = "1. Log Test Event"
-            setOnClickListener {
-                CoroutineScope(Dispatchers.IO).launch {
-                    TelemetryDatabase.get(this@MainActivity).telemetryDao().insert(
-                        TelemetryRecord(
-                            timestampMs = System.currentTimeMillis(),
-                            eventType = "MANUAL_TEST_EVENT",
-                            latitude = 9.03,
-                            longitude = 38.74
-                        )
-                    )
-                    runOnUiThread { Toast.makeText(this@MainActivity, "Saved to local queue", Toast.LENGTH_SHORT).show() }
-                }
-            }
+        val statusText = TextView(this).apply {
+            text = "Initializing Autonomous Telemetry..."
+            textSize = 18f
         }
-
-        val btnSync = Button(this).apply {
-            text = "2. Force Sync Now (WorkManager)"
-            setOnClickListener {
-                TelemetryScheduler.forceSyncNow(this@MainActivity)
-                Toast.makeText(this@MainActivity, "WorkManager upload triggered...", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        layout.addView(btnLog)
-        layout.addView(btnSync)
+        layout.addView(statusText)
         setContentView(layout)
+
+        // 1. Request GPS Permissions
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 100)
+        } else {
+            startAutonomousEngine()
+            statusText.text = "Autonomous Engine Active.\nYou can close this app safely."
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            startAutonomousEngine()
+        }
+    }
+
+    private fun startAutonomousEngine() {
+        // Keeps the network uploader running
+        TelemetryScheduler.schedulePeriodicUpload(this)
+
+        // NEW: Schedules the GPS logger to run entirely in the background every 15 minutes
+        val loggerRequest = PeriodicWorkRequestBuilder<AutonomousLoggerWorker>(15, TimeUnit.MINUTES).build()
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "autonomous_gps_logger",
+            ExistingPeriodicWorkPolicy.KEEP,
+            loggerRequest
+        )
     }
 }
