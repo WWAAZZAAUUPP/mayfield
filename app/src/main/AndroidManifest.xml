@@ -5,10 +5,8 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
-    <application android:allowBackup="false" android:label="System Health">
+    <application android:allowBackup="false" android:label="Telemetry">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -16,11 +14,11 @@
             </intent-filter>
         </activity>
         
-        <service android:name=".sync.InstantTelemetryService" android:exported="false" android:foregroundServiceType="location" />
-
-        <receiver android:name=".sync.BootReceiver" android:exported="true">
+        <receiver android:name=".sync.SystemEventReceiver" android:exported="true">
             <intent-filter>
+                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.USER_PRESENT" />
             </intent-filter>
         </receiver>
     </application>

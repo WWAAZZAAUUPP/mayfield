@@ -15,7 +15,6 @@ class TelemetryUploadWorker(context: Context, params: WorkerParameters) : Corout
             return Result.success()
         }
 
-        // Pass endpoint URL and optional API key if required by your endpoint
         val uploader = TelemetryUploader(BuildConfig.TELEMETRY_ENDPOINT)
         val outcome = uploader.upload(batch)
 
@@ -24,16 +23,12 @@ class TelemetryUploadWorker(context: Context, params: WorkerParameters) : Corout
                 dao.markSynced(batch.map { it.id })
                 Result.success()
             }
-            is UploadOutcome.Retryable -> {
+            is UploadOutcome.Retryable, is UploadOutcome.Error -> {
                 Result.retry()
             }
             is UploadOutcome.Permanent -> {
-                // Drop permanently failing invalid payloads so they don't block the queue
                 dao.markSynced(batch.map { it.id })
                 Result.failure()
-            }
-            is UploadOutcome.Error -> {
-                Result.retry()
             }
         }
     }

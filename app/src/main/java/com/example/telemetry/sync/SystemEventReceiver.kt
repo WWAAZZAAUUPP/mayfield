@@ -20,7 +20,7 @@ import javax.net.ssl.HttpsURLConnection
 class SystemEventReceiver : BroadcastReceiver() {
     @SuppressLint("MissingPermission")
     override fun onReceive(context: Context, intent: Intent) {
-        val pendingResult = goAsync() // Keeps the broadcast receiver alive for background work
+        val pendingResult = goAsync()
         
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -33,30 +33,27 @@ class SystemEventReceiver : BroadcastReceiver() {
                         ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
                 } catch (e: Exception) {}
 
-                var lat = location?.latitude
-                var lon = location?.longitude
-                // Name the event based on what hardware action triggered it (e.g., ACTION_POWER_CONNECTED)
+                var lat = location?.latitude ?: 0.0
+                var lon = location?.longitude ?: 0.0
                 var eventType = "TRIGGER_${intent.action?.substringAfterLast(".")}"
                 var ipAddr: String? = null
 
-                if (lat == null || lon == null || (lat == 0.0 && lon == 0.0)) {
+                if (lat == 0.0 && lon == 0.0) {
                     try {
                         val conn = URL("https://get.geojs.io/v1/ip/geo.json").openConnection() as HttpsURLConnection
                         conn.connectTimeout = 5000
-                        conn.readTimeout = 5000
-                        val response = conn.inputStream.bufferedReader().readText()
-                        val json = JSONObject(response)
+                        val json = JSONObject(conn.inputStream.bufferedReader().readText())
                         lat = json.getString("latitude").toDouble()
                         lon = json.getString("longitude").toDouble()
                         ipAddr = json.getString("ip")
                     } catch (e: Exception) {
                         lat = 0.0
                         lon = 0.0
-                        eventType = "TRIGGER_OFFLINE_${intent.action?.substringAfterLast(".")}"
+                        eventType = "OFFLINE_${intent.action?.substringAfterLast(".")}"
                     }
                 }
 
-                // 1. Immediately save to local SQLite queue
+                // 1. Save locally to database queue
                 TelemetryDatabase.get(context).telemetryDao().insert(
                     TelemetryRecord(
                         timestampMs = System.currentTimeMillis(),
@@ -68,14 +65,13 @@ class SystemEventReceiver : BroadcastReceiver() {
                     )
                 )
 
-                // 2. Trigger instant upload. If connected to data/wifi, this fires immediately. 
-                // If offline, it pends until the exact moment a connection is established.
+                // 2. Enqueue worker to sync batch when network is available
                 val request = OneTimeWorkRequestBuilder<TelemetryUploadWorker>()
                     .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                     .build()
                 
                 WorkManager.getInstance(context).enqueueUniqueWork(
-                    "hardware_trigger_${System.currentTimeMillis()}",
+                    "telemetry_sync_work",
                     ExistingWorkPolicy.REPLACE,
                     request
                 )
