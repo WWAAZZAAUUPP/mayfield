@@ -16,11 +16,11 @@ class TelemetryUploadWorker(context: Context, params: WorkerParameters) : Corout
         return when (val outcome = uploader.upload(batch)) {
             is UploadOutcome.Success -> {
                 dao.markSynced(batch.map { it.id })
-                SyncManager.lastSyncError = "Success: WorkManager Fallback Sync Completed"
+                SyncManager.updateStatus("Success: WorkManager Fallback Sync Completed")
                 Result.success()
             }
             is UploadOutcome.Error -> {
-                SyncManager.lastSyncError = "WorkManager Fallback Failed: ${outcome.message}"
+                SyncManager.updateStatus("WorkManager Fallback Failed: ${outcome.message}")
                 Result.retry()
             }
         }

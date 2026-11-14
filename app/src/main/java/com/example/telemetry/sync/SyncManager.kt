@@ -12,6 +12,10 @@ object SyncManager {
     var lastSyncError: String = "Idle / No attempts yet"
         private set
 
+    fun updateStatus(status: String) {
+        lastSyncError = status
+    }
+
     fun triggerRedundantSync(context: Context) {
         val appContext = context.applicationContext
         CoroutineScope(Dispatchers.IO).launch {
@@ -19,7 +23,7 @@ object SyncManager {
                 val dao = TelemetryDatabase.get(appContext).telemetryDao()
                 val batch = dao.getUnsynced(50)
                 if (batch.isEmpty()) {
-                    lastSyncError = "Queue empty. Waiting for triggers."
+                    updateStatus("Queue empty. Waiting for triggers.")
                     return@launch
                 }
 
@@ -27,16 +31,15 @@ object SyncManager {
                 when (val outcome = uploader.upload(batch)) {
                     is UploadOutcome.Success -> {
                         dao.markSynced(batch.map { it.id })
-                        lastSyncError = "Success: Direct Sync Completed (${batch.size} records)"
+                        updateStatus("Success: Direct Sync Completed (${batch.size} records)")
                     }
                     is UploadOutcome.Error -> {
-                        lastSyncError = "Direct Failed: ${outcome.message} -> Falling back to WorkManager"
-                        // Fallback Redundancy Channel
+                        updateStatus("Direct Failed: ${outcome.message} -> Falling back to WorkManager")
                         enqueueWorkManagerFallback(appContext)
                     }
                 }
             } catch (e: Exception) {
-                lastSyncError = "Exception: ${e.localizedMessage} -> Falling back to WorkManager"
+                updateStatus("Exception: ${e.localizedMessage} -> Falling back to WorkManager")
                 enqueueWorkManagerFallback(appContext)
             }
         }
