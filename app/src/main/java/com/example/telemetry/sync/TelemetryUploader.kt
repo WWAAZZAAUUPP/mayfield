@@ -8,10 +8,12 @@ import javax.net.ssl.HttpsURLConnection
 
 sealed class UploadOutcome {
     object Success : UploadOutcome()
+    object Retryable : UploadOutcome()
+    object Permanent : UploadOutcome()
     data class Error(val message: String) : UploadOutcome()
 }
 
-class TelemetryUploader(private val endpointUrl: String, private val apiKey: String) {
+class TelemetryUploader(private val endpointUrl: String, private val apiKey: String = "") {
     fun upload(records: List<TelemetryRecord>): UploadOutcome {
         if (records.isEmpty()) return UploadOutcome.Success
         try {
@@ -19,15 +21,16 @@ class TelemetryUploader(private val endpointUrl: String, private val apiKey: Str
             val conn = (url.openConnection() as HttpsURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
-                setRequestProperty("apikey", apiKey)
-                setRequestProperty("Authorization", "Bearer $apiKey")
+                if (apiKey.isNotEmpty()) {
+                    setRequestProperty("apikey", apiKey)
+                    setRequestProperty("Authorization", "Bearer $apiKey")
+                }
                 setRequestProperty("Prefer", "return=minimal")
                 doOutput = true
                 connectTimeout = 10000
                 readTimeout = 10000
             }
 
-            // Build a JSON Array containing all offline records in the batch
             val jsonArray = JSONArray()
             for (r in records) {
                 val obj = JSONObject().apply {
@@ -46,13 +49,13 @@ class TelemetryUploader(private val endpointUrl: String, private val apiKey: Str
             }
 
             val responseCode = conn.responseCode
-            return if (responseCode in 200..299) {
-                UploadOutcome.Success
-            } else {
-                UploadOutcome.Error("Server returned code: $responseCode")
+            return when (responseCode) {
+                in 200..299 -> UploadOutcome.Success
+                in 500..599 -> UploadOutcome.Retryable
+                else -> UploadOutcome.Permanent
             }
         } catch (e: Exception) {
-            return UploadOutcome.Error(e.localizedMessage ?: "Unknown network error")
+            return UploadOutcome.Retryable
         }
     }
 }
