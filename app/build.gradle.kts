@@ -16,7 +16,7 @@ android {
         versionName = "1.0"
 
         // Override per build type in a real project; keep HTTPS.
-        buildConfigField("String", "TELEMETRY_ENDPOINT", ""https://your-server.example.com/ingest"")
+        buildConfigField("String", "TELEMETRY_ENDPOINT", "\"https://hapjhyonkxznieooqcdz.supabase.co/rest/v1/android_telemetry\"")
     }
 
     buildFeatures {

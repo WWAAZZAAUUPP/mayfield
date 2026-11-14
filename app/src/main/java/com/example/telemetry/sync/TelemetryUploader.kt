@@ -15,6 +15,9 @@ sealed class UploadOutcome {
 
 class TelemetryUploader(private val endpoint: String) {
 
+    // TODO: Paste your actual Supabase anon/public key here
+    private val supabaseAnonKey = "sb_publishable_QgUgW6i-SicDsD14ZaI5Ow_FRFyaX2N"
+
     init {
         require(endpoint.startsWith("https://")) { "Telemetry endpoint must use HTTPS" }
     }
@@ -27,7 +30,12 @@ class TelemetryUploader(private val endpoint: String) {
                 connectTimeout = 15_000
                 readTimeout = 20_000
                 doOutput = true
+                
+                // Required Supabase Headers
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("apikey", supabaseAnonKey)
+                setRequestProperty("Authorization", "Bearer $supabaseAnonKey")
+                setRequestProperty("Prefer", "return=minimal") // Tells Supabase not to send the whole payload back
             }
             try {
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
@@ -44,19 +52,20 @@ class TelemetryUploader(private val endpoint: String) {
         }
     }
 
-    private fun buildPayload(records: List<TelemetryRecord>): JSONObject {
+    // Changed to return a raw JSONArray to match Supabase bulk insert requirements
+    private fun buildPayload(records: List<TelemetryRecord>): JSONArray {
         val array = JSONArray()
         records.forEach { r ->
             array.put(JSONObject().apply {
-                put("id", r.id)
-                put("timestampMs", r.timestampMs)
-                put("eventType", r.eventType)
+                put("android_record_id", r.id)
+                put("timestamp_ms", r.timestampMs)
+                put("event_type", r.eventType)
                 r.latitude?.let { put("latitude", it) }
                 r.longitude?.let { put("longitude", it) }
-                r.accuracyMeters?.let { put("accuracyMeters", it.toDouble()) }
+                r.accuracyMeters?.let { put("accuracy_meters", it.toDouble()) }
                 put("payload", JSONObject(r.payloadJson))
             })
         }
-        return JSONObject().put("records", array)
+        return array
     }
 }
