@@ -7,7 +7,6 @@ import android.content.Intent
 import android.location.Location
 import android.location.LocationManager
 import android.provider.Settings
-import androidx.work.*
 import com.example.telemetry.data.TelemetryDatabase
 import com.example.telemetry.data.TelemetryRecord
 import kotlinx.coroutines.CoroutineScope
@@ -21,7 +20,6 @@ class SystemEventReceiver : BroadcastReceiver() {
     @SuppressLint("MissingPermission")
     override fun onReceive(context: Context, intent: Intent) {
         val pendingResult = goAsync()
-        
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val hardwareId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
@@ -41,20 +39,18 @@ class SystemEventReceiver : BroadcastReceiver() {
                 if (lat == 0.0 && lon == 0.0) {
                     try {
                         val conn = URL("https://get.geojs.io/v1/ip/geo.json").openConnection() as HttpsURLConnection
-                        conn.connectTimeout = 5000
+                        conn.connectTimeout = 3000
                         val json = JSONObject(conn.inputStream.bufferedReader().readText())
                         lat = json.getString("latitude").toDouble()
                         lon = json.getString("longitude").toDouble()
                         ipAddr = json.getString("ip")
                     } catch (e: Exception) {
-                        lat = 0.0
-                        lon = 0.0
                         eventType = "OFFLINE_${intent.action?.substringAfterLast(".")}"
                     }
                 }
 
-                // 1. Save locally to database queue
-                TelemetryDatabase.get(context).telemetryDao().insert(
+                val dao = TelemetryDatabase.get(context).telemetryDao()
+                dao.insert(
                     TelemetryRecord(
                         timestampMs = System.currentTimeMillis(),
                         eventType = eventType,
@@ -65,16 +61,8 @@ class SystemEventReceiver : BroadcastReceiver() {
                     )
                 )
 
-                // 2. Enqueue worker to sync batch when network is available
-                val request = OneTimeWorkRequestBuilder<TelemetryUploadWorker>()
-                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                    .build()
-                
-                WorkManager.getInstance(context).enqueueUniqueWork(
-                    "telemetry_sync_work",
-                    ExistingWorkPolicy.REPLACE,
-                    request
-                )
+                SyncManager.updateStatus("Receiver saved event. Syncing...")
+                SyncManager.triggerRedundantSync(context)
             } finally {
                 pendingResult.finish()
             }

