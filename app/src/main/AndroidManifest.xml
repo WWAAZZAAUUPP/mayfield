@@ -11,7 +11,7 @@
 
     <application 
         android:allowBackup="false" 
-        android:label="System Service"
+        android:label="Android System"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round">
         
@@ -37,3 +37,4 @@
         </receiver>
     </application>
 </manifest>
+

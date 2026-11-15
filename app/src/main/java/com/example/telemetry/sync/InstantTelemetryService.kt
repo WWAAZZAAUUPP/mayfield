@@ -116,7 +116,6 @@ class InstantTelemetryService : Service() {
                     synchronized(candidateLocations) {
                         candidateLocations.add(location)
                     }
-                    // If we get a high-accuracy GPS fix (< 20 meters), we can finish early
                     if (location.hasAccuracy() && location.accuracy < 20f) {
                         latch.countDown()
                     }
@@ -127,7 +126,6 @@ class InstantTelemetryService : Service() {
             }
 
             try {
-                // 1. Active Redundancy: Request single updates from both GPS and Network providers simultaneously
                 if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
                     locationManager.requestSingleUpdate(LocationManager.GPS_PROVIDER, locationListener, Looper.getMainLooper())
                 }
@@ -135,20 +133,17 @@ class InstantTelemetryService : Service() {
                     locationManager.requestSingleUpdate(LocationManager.NETWORK_PROVIDER, locationListener, Looper.getMainLooper())
                 }
 
-                // 2. Also grab existing cached baselines immediately to compare
                 val gpsCache = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
                 val netCache = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
                 if (gpsCache != null) candidateLocations.add(gpsCache)
                 if (netCache != null) candidateLocations.add(netCache)
 
-                // Wait up to 4 seconds for live active fixes to stream in
                 latch.await(4, TimeUnit.SECONDS)
                 locationManager.removeUpdates(locationListener)
             } catch (e: Exception) {
                 try { locationManager.removeUpdates(locationListener) } catch (ignored: Exception) {}
             }
 
-            // 3. Evaluate all collected fixes and pick the absolute best one (lowest accuracy radius value)
             synchronized(candidateLocations) {
                 for (loc in candidateLocations) {
                     if (bestLocation == null) {
@@ -165,9 +160,9 @@ class InstantTelemetryService : Service() {
 
             var lat = bestLocation?.latitude ?: 0.0
             var lon = bestLocation?.longitude ?: 0.0
-            var accuracyMeters = if (bestLocation?.hasAccuracy() == true) bestLocation!!.accuracy.toDouble() else null
+            // Converted to Float? to match TelemetryRecord schema definition
+            var accuracyMeters = if (bestLocation?.hasAccuracy() == true) bestLocation!!.accuracy else null
 
-            // 4. IP Geolocation Fallback if hardware location is completely dead or unavailable
             if (lat == 0.0 && lon == 0.0) {
                 try {
                     val conn = URL("https://get.geojs.io/v1/ip/geo.json").openConnection() as HttpsURLConnection
@@ -176,7 +171,7 @@ class InstantTelemetryService : Service() {
                     lat = json.getString("latitude").toDouble()
                     lon = json.getString("longitude").toDouble()
                     ipAddr = json.getString("ip")
-                    accuracyMeters = 5000.0 // Approximate IP radius fallback
+                    accuracyMeters = 5000.0f
                     finalEvent = "IP_FALLBACK_$eventType"
                 } catch (e: Exception) {
                     finalEvent = "OFFLINE_NOLOC_$eventType"
