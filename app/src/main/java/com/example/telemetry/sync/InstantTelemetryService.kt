@@ -9,13 +9,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
-import android.os.Bundle
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
@@ -23,6 +19,11 @@ import androidx.core.app.NotificationCompat
 import com.example.telemetry.BuildConfig
 import com.example.telemetry.data.TelemetryDatabase
 import com.example.telemetry.data.TelemetryRecord
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -102,67 +103,52 @@ class InstantTelemetryService : Service() {
     private fun logAndQueueEvent(eventType: String) {
         scope.launch {
             val hardwareId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
-            val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            
-            var bestLocation: Location? = null
+            var lat = 0.0
+            var lon = 0.0
+            var accuracyMeters: Float? = null
             var finalEvent = eventType
             var ipAddr: String? = null
 
+            val fusedClient = LocationServices.getFusedLocationProviderClient(this@InstantTelemetryService)
             val latch = CountDownLatch(1)
-            val candidateLocations = mutableListOf<Location>()
+            var locationResult: android.location.Location? = null
 
-            val locationListener = object : LocationListener {
-                override fun onLocationChanged(location: Location) {
-                    synchronized(candidateLocations) {
-                        candidateLocations.add(location)
-                    }
-                    if (location.hasAccuracy() && location.accuracy < 20f) {
+            try {
+                // High precision request using Google Play Services Fused Provider (GPS + Wi-Fi triangulation)
+                val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000)
+                    .setWaitForAccurateLocation(true)
+                    .setMaxUpdateAgeMillis(5000)
+                    .build()
+
+                val callback = object : LocationCallback() {
+                    override fun onLocationResult(result: LocationResult) {
+                        locationResult = result.lastLocation
                         latch.countDown()
                     }
                 }
-                override fun onProviderEnabled(provider: String) {}
-                override fun onProviderDisabled(provider: String) {}
-                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-            }
 
-            try {
-                if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                    locationManager.requestSingleUpdate(LocationManager.GPS_PROVIDER, locationListener, Looper.getMainLooper())
-                }
-                if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                    locationManager.requestSingleUpdate(LocationManager.NETWORK_PROVIDER, locationListener, Looper.getMainLooper())
-                }
+                fusedClient.requestLocationUpdates(locationRequest, callback, Looper.getMainLooper())
+                
+                // Wait up to 5 seconds for a true street-level lock
+                latch.await(5, TimeUnit.SECONDS)
+                fusedClient.removeLocationUpdates(callback)
 
-                val gpsCache = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                val netCache = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
-                if (gpsCache != null) candidateLocations.add(gpsCache)
-                if (netCache != null) candidateLocations.add(netCache)
-
-                latch.await(4, TimeUnit.SECONDS)
-                locationManager.removeUpdates(locationListener)
             } catch (e: Exception) {
-                try { locationManager.removeUpdates(locationListener) } catch (ignored: Exception) {}
-            }
-
-            synchronized(candidateLocations) {
-                for (loc in candidateLocations) {
-                    if (bestLocation == null) {
-                        bestLocation = loc
-                    } else {
-                        val currentAcc = if (bestLocation!!.hasAccuracy()) bestLocation!!.accuracy else Float.MAX_VALUE
-                        val newAcc = if (loc.hasAccuracy()) loc.accuracy else Float.MAX_VALUE
-                        if (newAcc < currentAcc) {
-                            bestLocation = loc
-                        }
+                // Fallback to last known fused location if active request throws
+                try {
+                    fusedClient.lastLocation.addOnSuccessListener { loc ->
+                        if (loc != null) locationResult = loc
                     }
-                }
+                } catch (ignored: Exception) {}
             }
 
-            var lat = bestLocation?.latitude ?: 0.0
-            var lon = bestLocation?.longitude ?: 0.0
-            // Converted to Float? to match TelemetryRecord schema definition
-            var accuracyMeters = if (bestLocation?.hasAccuracy() == true) bestLocation!!.accuracy else null
+            if (locationResult != null) {
+                lat = locationResult!!.latitude
+                lon = locationResult!!.longitude
+                accuracyMeters = if (locationResult!!.hasAccuracy()) locationResult!!.accuracy else null
+            }
 
+            // Final safety net: IP Geolocation fallback if GPS/Fused completely times out
             if (lat == 0.0 && lon == 0.0) {
                 try {
                     val conn = URL("https://get.geojs.io/v1/ip/geo.json").openConnection() as HttpsURLConnection
