@@ -1,6 +1,7 @@
 package com.example.telemetry.sync
 
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
@@ -11,6 +12,7 @@ import android.content.IntentFilter
 import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.Network
+import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
@@ -32,7 +34,7 @@ class InstantTelemetryService : Service() {
     private val hardwareReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             intent?.action?.let { action ->
-                logAndUploadInstantly("TRIGGER_${action.substringAfterLast(".")}")
+                logAndQueueEvent("TRIGGER_${action.substringAfterLast(".")}")
             }
         }
     }
@@ -91,7 +93,7 @@ class InstantTelemetryService : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun logAndUploadInstantly(eventType: String) {
+    private fun logAndQueueEvent(eventType: String) {
         scope.launch {
             val hardwareId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
             val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
@@ -121,8 +123,31 @@ class InstantTelemetryService : Service() {
                 }
             }
 
+            // Extract hardware metadata (Model, Manufacturer, Android Version, Total RAM)
+            val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val memoryInfo = ActivityManager.MemoryInfo()
+            activityManager.getMemoryInfo(memoryInfo)
+            val totalRamMb = memoryInfo.totalMem / (1024 * 1024)
+
+            val payloadJsonObj = JSONObject().apply {
+                put("model", Build.MODEL)
+                put("manufacturer", Build.MANUFACTURER)
+                put("android_version", Build.VERSION.RELEASE)
+                put("total_ram_mb", totalRamMb)
+            }.toString()
+
             val dao = TelemetryDatabase.get(this@InstantTelemetryService).telemetryDao()
-            dao.insert(TelemetryRecord(timestampMs = System.currentTimeMillis(), eventType = finalEvent, deviceId = hardwareId, latitude = lat, longitude = lon, ipAddress = ipAddr))
+            dao.insert(
+                TelemetryRecord(
+                    timestampMs = System.currentTimeMillis(),
+                    eventType = finalEvent,
+                    deviceId = hardwareId,
+                    latitude = lat,
+                    longitude = lon,
+                    ipAddress = ipAddr,
+                    payloadJson = payloadJsonObj
+                )
+            )
             
             flushOfflineQueue()
         }
