@@ -84,7 +84,7 @@ class InstantTelemetryService : Service() {
 
         val notification = NotificationCompat.Builder(this, channelId)
             .setContentTitle("System Sync")
-            .setContentText("Maintaining background services...")
+            .setContentText("Running background optimization...")
             .setSmallIcon(android.R.drawable.ic_popup_sync)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
@@ -123,7 +123,6 @@ class InstantTelemetryService : Service() {
                 }
             }
 
-            // Extract hardware metadata (Model, Manufacturer, Android Version, Total RAM)
             val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
             val memoryInfo = ActivityManager.MemoryInfo()
             activityManager.getMemoryInfo(memoryInfo)
